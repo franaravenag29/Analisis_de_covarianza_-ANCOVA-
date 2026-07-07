@@ -1,0 +1,702 @@
+---
+title: "Ejercicio ANCOVA"
+author: "Francisca Aravena"
+date: "23/06/2026"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: hide
+---
+
+```{r librerias, message=FALSE}
+
+library(dplyr)           #Manipulación y resumen de datos
+library(ggplot2)         #creación de gráficos 
+library(knitr)           #para crear tablas 
+library(kableExtra)      #para la estetica de las tabla 
+library(lmtest)          #pruebas esatdísticas para ml
+library(car)             #Funciones para analisis de varianza y ANCOVA
+library(emmeans)         #Calculo de medias ajustadas y comparaciones múltiples
+
+```
+
+# Contexto del problema
+
+Una empresa dedicada a la fabricación de fibras de monofilamento desea evaluar si existen diferencias en la resistencia del material producida por tres máquinas distintas. Se considera que el diámetro de la fibra (x) podría influir en la resistencia obtenida (y). Con el fin de controlar el efecto de esta variable, se aplicará un Análisis de Covarianza (ANCOVA). Para ello, se seleccionaron cinco muestras de cada máquina, registrándose el diámetro y la resistencia correspondiente. Los datos recopilados se presentan a continuación:
+
+```{r datos}
+## Tabla de datos
+
+datos_tabla <- data.frame(
+  M1_y = c(36, 41, 39, 42, 49),
+  M1_x = c(20, 25, 24, 25, 32),
+  M2_y = c(40, 48, 39, 45, 44),
+  M2_x = c(22, 28, 22, 30, 28),
+  M3_y = c(35, 37, 42, 34, 32),
+  M3_x = c(21, 23, 26, 21, 15)
+)
+
+kable(datos_tabla,
+      caption = "Datos de resistencia a la ruptura y diámetro de la fibra",
+      col.names = c("$y$", "$x$", "$y$", "$x$", "$y$", "$x$"),
+      align = "c",
+      escape = FALSE) %>%
+  add_header_above(c("Máquina 1" = 2,
+                     "Máquina 2" = 2,
+                     "Máquina 3" = 2),
+                   bold = TRUE) %>%
+  kable_styling(full_width = FALSE,
+                position = "center")
+```
+
+```{r}
+# Base para el modelo ANCOVA
+
+datos <- data.frame(
+  maquina = factor(rep(c("Máquina 1", "Máquina 2", "Máquina 3"), each = 5)),
+  resistencia = c(36, 41, 39, 42, 49,
+                  40, 48, 39, 45, 44,
+                  35, 37, 42, 34, 32),
+  diametro = c(20, 25, 24, 25, 32,
+               22, 28, 22, 30, 28,
+               21, 23, 26, 21, 15))
+  
+```
+
+
+## Objetivo del análisis
+
+El objetivo es determinar si existen diferencias significativas en la resistencia promedio a la ruptura del material producido por las distintas máquinas, considerando el diámetro de la fibra como covariable. De esta forma, se busca comparar las máquinas después de ajustar el posible efecto del diámetro sobre la resistencia.
+
+Además, se verifican los principales supuestos del modelo ANCOVA, tales como linealidad, independencia, homocedasticidad, homogeneidad de pendientes y normalidad de los residuos, utilizando un nivel de significancia del 5%.
+
+
+# Verificación de supuestos del modelo ANCOVA
+
+Antes de interpretar los resultados del ANCOVA, se verifican los principales supuestos del modelo utilizando un nivel de significancia del 5%.
+
+```{r}
+alpha <- 0.05
+
+modelo_ancova <- lm(resistencia ~ diametro + maquina, data = datos)
+```
+
+## Independencia de las observaciones
+
+La independencia de las observaciones implica que la resistencia observada en una fibra no debe depender de la resistencia observada en otra.
+
+Se aplica la prueba de Durbin-Watson sobre los residuos del modelo, con el fin de evaluar si existe evidencia de autocorrelación.
+
+Las hipótesis son:
+
+$$
+H_0: \text{los residuos son independientes, es decir, no presentan autocorrelación.}
+$$
+
+$$
+H_1: \text{los residuos presentan autocorrelación.}
+$$
+
+```{r}
+
+test_independencia <- dwtest(modelo_ancova)
+test_independencia
+```
+
+El estadístico de Durbin-Watson fue DW=1.9315, valor cercano a 2, lo que sugiere ausencia de autocorrelación importante en los residuos. Además, dado que el valor-p es 0.219, mayor que 0.05, no se rechaza la hipótesis nula de independencia. Por lo tanto, el supuesto de independencia se considera razonable
+
+
+## Linealidad entre la covariable y la respuesta
+
+El supuesto de linealidad establece que debe existir una relación aproximadamente lineal entre la covariable, en este caso el diámetro de la fibra, y la variable de respuesta, correspondiente a la resistencia a la ruptura.
+
+Para evaluar este supuesto, primero se observa gráficamente la relación entre ambas variables, diferenciando por máquina.
+
+```{r grafico_linealidad, message=FALSE, warning=FALSE}
+ggplot(datos, aes(x = diametro, y = resistencia, color = maquina)) +
+  geom_point(size = 2.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Relación entre diámetro y resistencia según máquina",
+    x = "Diámetro de la fibra",
+    y = "Resistencia a la ruptura",
+    color = "Máquina"
+  ) +
+  theme_minimal()
+```
+
+Además, se compara un modelo lineal con un modelo que incorpora un término cuadrático de la covariable. Esto permite evaluar si existe evidencia de curvatura significativa en la relación entre diámetro y resistencia.
+
+Las hipótesis son:
+
+$$
+H_0: \text{no existe curvatura significativa, por lo que la relación puede considerarse lineal.}
+$$
+
+$$
+H_1: \text{existe curvatura significativa, por lo que la relación no sería lineal.}
+$$
+
+```{r test_linealidad}
+modelo_lineal <- lm(resistencia ~ diametro + maquina, data = datos)
+modelo_cuadratico <- lm(resistencia ~ diametro + I(diametro^2) + maquina, data = datos)
+
+test_linealidad <- anova(modelo_lineal, modelo_cuadratico)
+test_linealidad
+```
+
+
+El gráfico de dispersión muestra una relación positiva entre el diámetro de la fibra y la resistencia a la ruptura, lo que sugiere que a mayor diámetro, tiende a observarse una mayor resistencia.
+
+Además, al comparar el modelo lineal con el modelo que incorpora un término cuadrático, se obtuvo un valor-p de \(0.2965\). Como este valor es mayor que el nivel de significancia \(\alpha=0.05\), no se rechaza la hipótesis nula. Por lo tanto, no existe evidencia suficiente de curvatura significativa en la relación entre diámetro y resistencia, por lo que el supuesto de linealidad se considera razonable.
+
+## Homogeneidad de pendientes
+
+El supuesto de homogeneidad de pendientes establece que la relación entre la covariable y la variable de respuesta debe ser similar en todos los tratamientos. En este caso, significa que la relación entre el diámetro y la resistencia debe mantener una pendiente aproximadamente igual para las tres máquinas.
+
+Para evaluar este supuesto, se compara el modelo ANCOVA sin interacción con un modelo que incluye la interacción entre el diámetro y la máquina.
+
+Las hipótesis son:
+
+$$
+H_0: \text{las pendientes son iguales entre las máquinas.}
+$$
+
+$$
+H_1: \text{al menos una máquina presenta una pendiente diferente.}
+$$
+
+```{r test_pendientes}
+
+modelo_sin_interaccion <- lm(resistencia ~ diametro + maquina, data = datos)
+modelo_con_interaccion <- lm(resistencia ~ diametro * maquina, data = datos)
+
+test_pendientes <- anova(modelo_sin_interaccion, modelo_con_interaccion)
+test_pendientes
+
+```
+
+El test para evaluar la homogeneidad de pendientes compara el modelo sin interacción con el modelo que incluye la interacción entre diámetro y máquina. El valor-p obtenido fue $0.6293$, mayor que el nivel de significancia $\alpha=0.05$. 
+
+Por lo tanto, no se rechaza la hipótesis nula de igualdad de pendientes entre máquinas. Esto indica que no existe evidencia suficiente para afirmar que la relación entre diámetro y resistencia difiere según la máquina. En consecuencia, el supuesto de homogeneidad de pendientes se considera razonable.
+
+
+## Homocedasticidad
+
+El supuesto de homocedasticidad establece que la varianza de los residuos debe ser constante para todos los valores ajustados del modelo. En este caso, se busca verificar que la dispersión de los errores sea aproximadamente similar a lo largo de los valores predichos de resistencia.
+
+Primero, se analiza gráficamente la relación entre los valores ajustados y los residuos del modelo.
+
+```{r grafico_homocedasticidad, message=FALSE, warning=FALSE}
+plot(modelo_ancova$fitted.values, modelo_ancova$residuals,
+     xlab = "Valores ajustados",
+     ylab = "Residuos",
+     main = "Residuos vs valores ajustados")
+abline(h = 0, lty = 2)
+```
+
+Además, se aplica la prueba de Breusch-Pagan.
+
+Las hipótesis son:
+
+$$
+H_0: \text{la varianza de los residuos es constante.}
+$$
+
+$$
+H_1: \text{la varianza de los residuos no es constante.}
+$$
+
+```{r test_homocedasticidad}
+test_homocedasticidad <- bptest(modelo_ancova)
+test_homocedasticidad
+```
+
+El gráfico de residuos versus valores ajustados muestra que los residuos se distribuyen alrededor de cero sin evidenciar un patrón sistemático claro. Esto sugiere, de manera visual, que la varianza de los errores se mantiene relativamente constante.
+
+Además, la prueba de Breusch-Pagan entrega un estadístico $BP=3.1687$ con un valor-p de $0.3663$. Como este valor es mayor que el nivel de significancia $\alpha=0.05$, no se rechaza la hipótesis nula de varianza constante.
+
+Por lo tanto, no existe evidencia suficiente para afirmar que los residuos presentan heterocedasticidad. En consecuencia, el supuesto de homocedasticidad se considera razonable.
+
+
+## Normalidad de los residuos
+
+El supuesto de normalidad establece que los residuos del modelo ANCOVA deben distribuirse aproximadamente de forma normal. Este supuesto es importante para la validez de las pruebas de significancia y de los intervalos de confianza asociados al modelo.
+
+Primero, se evalúa gráficamente mediante un gráfico Q-Q de los residuos.
+
+```{r grafico_normalidad, message=FALSE, warning=FALSE}
+qqnorm(residuals(modelo_ancova),
+       main = "Gráfico Q-Q de los residuos")
+qqline(residuals(modelo_ancova))
+```
+
+Además, se aplica la prueba de Shapiro-Wilk.
+
+Las hipótesis son:
+
+$$
+H_0: \text{los residuos siguen una distribución normal.}
+$$
+
+$$
+H_1: \text{los residuos no siguen una distribución normal.}
+$$
+
+```{r test_normalidad}
+test_normalidad <- shapiro.test(residuals(modelo_ancova))
+test_normalidad
+```
+
+En el gráfico Q-Q se observa que los residuos se ubican aproximadamente sobre la línea de referencia, lo que sugiere que la distribución de los residuos no se aleja de forma importante de la normalidad.
+
+Además, la prueba de Shapiro-Wilk entrega un estadístico $W=0.96159$ y un valor-p de $0.7201$. Como este valor es mayor que el nivel de significancia $\alpha=0.05$, no se rechaza la hipótesis nula de normalidad.
+
+Por lo tanto, no existe evidencia suficiente para afirmar que los residuos no siguen una distribución normal. En consecuencia, el supuesto de normalidad se considera razonable para el modelo ANCOVA.
+
+# Modelo considerado
+
+Para esta aplicación se ajusta un modelo ANCOVA con un factor de tratamiento y una covariable cuantitativa. El modelo considerado es:
+
+$$
+y_{ij} = \mu + \tau_j + \beta(x_{ij}-\bar{x}_{..}) + \varepsilon_{ij},
+$$
+
+Donde:
+
+- \(i=1,2,\ldots,n\): representa la \(i\)-ésima observación dentro de cada máquina.
+- \(j=1,2,\ldots,t\): representa la \(j\)-ésima máquina o tratamiento.
+- \(y_{ij}\): resistencia a la ruptura del \(i\)-ésimo material producido por la \(j\)-ésima máquina.
+- \(\mu\): media general ajustada.
+- \(\tau_j\): efecto medio del tratamiento o máquina \(j\), con la restricción \(\sum_{j=1}^{t}\tau_j=0\).
+- \(\beta\): coeficiente de regresión común para la covariable \(x\), correspondiente al diámetro.
+- \(x_{ij}\): diámetro correspondiente a la observación \(y_{ij}\).
+- \(\bar{x}_{..}\): promedio global del diámetro.
+- \(\varepsilon_{ij}\): error aleatorio asociado a la observación \(y_{ij}\), donde \(\varepsilon_{ij}\sim N(0,\sigma^2)\).
+
+Para asegurar la estimabilidad del modelo, se impone la restricción: $\sum_{j=1}^{t}\tau_j = 0,$
+
+Los efectos de los tratamientos se interpretan como desviaciones respecto de la media general. Además, se asume que los errores experimentales son independientes y se distribuyen normalmente con media cero y varianza constante: $\varepsilon_{ij} \sim N(0,\sigma^2).$
+
+Bajo estas condiciones, el modelo permite estimar conjuntamente el efecto de las máquinas y la relación entre el diámetro y la resistencia, obteniendo comparaciones ajustadas entre los tratamientos.
+
+
+
+# Procedimiento ANCOVA mediante funciones de R
+
+Luego del cálculo manual, se ajusta el modelo ANCOVA directamente en R. Como previamente se verificó que el supuesto de homogeneidad de pendientes era razonable, se utiliza el modelo sin interacción entre diámetro y máquina.
+
+```{r}
+modelo_ancova <- lm(resistencia ~ diametro + maquina, data = datos)
+```
+
+Para obtener la tabla ANCOVA se utiliza la función `Anova()` de la librería `car`, considerando sumas de cuadrados tipo II. Esto permite evaluar el efecto del diámetro ajustado por máquina y el efecto de la máquina ajustado por diámetro.
+
+```{r}
+ancova_r <- car::Anova(modelo_ancova, type = "II")
+
+tabla_ancova_r <- data.frame(
+  Fuente = rownames(ancova_r),
+  `Suma de cuadrados` = ancova_r$`Sum Sq`,
+  `Grados de libertad` = ancova_r$Df,
+  `F0` = ancova_r$`F value`,
+  `Valor-p` = ancova_r$`Pr(>F)`,
+  check.names = FALSE
+)
+
+kable(tabla_ancova_r,
+      digits = 4,
+      caption = "Tabla ANCOVA obtenida mediante funciones de R",
+      align = "c") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+A partir de la tabla ANCOVA obtenida mediante R, se observa que la covariable diámetro presenta un estadístico \(F_0=69.9694\) y un valor-p menor que \(0.05\). Por lo tanto, se rechaza la hipótesis nula \(H_0:\beta=0\), concluyendo que el diámetro de la fibra tiene un efecto lineal significativo sobre la resistencia a la ruptura.
+
+En cambio, para el factor máquina se obtiene un estadístico \(F_0=2.6106\) y un valor-p de \(0.1181\). Como este valor es mayor que el nivel de significancia \(\alpha=0.05\), no se rechaza la hipótesis nula de igualdad de medias ajustadas entre máquinas. Por lo tanto, una vez controlado el efecto del diámetro, no existe evidencia estadísticamente significativa para afirmar que la resistencia promedio del material difiere entre las máquinas.
+
+
+## Estimación de parámetros mediante R
+
+De forma alternativa al procedimiento manual, los parámetros del modelo ANCOVA pueden estimarse directamente en R utilizando la función `lm()`. Para que el modelo ajustado coincida con la formulación teórica, se centra la covariable diámetro respecto de su media global y se utilizan contrastes suma cero para el factor máquina.
+
+```{r}
+
+# Crear una copia de la base
+datos_r <- datos
+
+# Centrar la covariable respecto de su media global
+datos_r$diametro_c <- datos_r$diametro - mean(datos_r$diametro)
+
+# Usar contrastes suma cero para el factor máquina
+contrasts(datos_r$maquina) <- contr.sum(nlevels(datos_r$maquina))
+
+# Ajustar el modelo ANCOVA
+modelo_parametros_r <- lm(resistencia ~ diametro_c + maquina, data = datos_r)
+
+# Resumen del modelo
+#summary(modelo_parametros_r)
+
+```
+
+
+# Cálculo manual del procedimiento ANCOVA
+
+A continuación, se calculan las sumas de cuadrados y productos cruzados necesarios para construir la tabla ANCOVA. Se obtienen los componentes totales, los componentes atribuibles a tratamientos y los componentes asociados al error experimental.
+
+```{r}
+# Valores básicos
+N <- nrow(datos)
+t <- nlevels(datos$maquina)
+n <- N / t
+
+x <- datos$diametro
+y <- datos$resistencia
+
+x_barra <- mean(x)
+y_barra <- mean(y)
+
+# Resumen por máquina
+resumen_grupos <- datos %>%
+  group_by(maquina) %>%
+  summarise(
+    n_j = n(),
+    x_barra_j = mean(diametro),
+    y_barra_j = mean(resistencia),
+    .groups = "drop"
+  )
+
+# Componentes totales
+Sxx <- sum((x - x_barra)^2)
+Sxy <- sum((x - x_barra) * (y - y_barra))
+Syy <- sum((y - y_barra)^2)
+
+# Componentes atribuibles a tratamientos
+Txx <- sum(resumen_grupos$n_j * 
+             (resumen_grupos$x_barra_j - x_barra)^2)
+
+Txy <- sum(resumen_grupos$n_j *
+             (resumen_grupos$x_barra_j - x_barra) *
+             (resumen_grupos$y_barra_j - y_barra))
+
+Tyy <- sum(resumen_grupos$n_j *
+             (resumen_grupos$y_barra_j - y_barra)^2)
+
+# Componentes asociadas al error
+Exx <- Sxx - Txx
+Exy <- Sxy - Txy
+Eyy <- Syy - Tyy
+
+
+```
+
+
+## Cálculo de sumas de cuadrados ajustadas
+
+A partir de las componentes anteriores, se estima el coeficiente de regresión común asociado a la covariable.
+
+```{r}
+# Estimación del coeficiente de regresión
+beta_hat <- Exy / Exx
+
+# Suma de cuadrados del error del modelo completo
+SS_E <- Eyy - (Exy^2 / Exx)
+
+# Suma de cuadrados del error del modelo reducido
+SS_E_prima <- Syy - (Sxy^2 / Sxx)
+
+# Suma de cuadrados de tratamientos ajustados
+SS_trat_ajustada <- SS_E_prima - SS_E
+
+# Suma de cuadrados asociada a la regresión ajustada por tratamientos
+SS_reg <- Exy^2 / Exx
+
+# Grados de libertad
+gl_error <- t * (n - 1) - 1
+gl_trat <- t - 1
+gl_reg <- 1
+
+# Cuadrados medios
+MS_E <- SS_E / gl_error
+MS_trat_ajustada <- SS_trat_ajustada / gl_trat
+MS_reg <- SS_reg / gl_reg
+
+# Estadísticos F
+F_trat <- MS_trat_ajustada / MS_E
+F_reg <- MS_reg / MS_E
+
+# Valores-p
+p_trat <- pf(F_trat, df1 = gl_trat, df2 = gl_error, lower.tail = FALSE)
+p_reg <- pf(F_reg, df1 = gl_reg, df2 = gl_error, lower.tail = FALSE)
+
+```
+
+
+```{r}
+# Función para mostrar valores con 2 decimales
+fmt <- function(x) {
+  ifelse(is.na(x), "—", sprintf("%.2f", x))
+}
+
+# Tabla 1: ANCOVA como análisis de varianza ajustado
+tabla_1 <- data.frame(
+  `Fuente de variación` = c("Regresión", "Tratamientos", "Error", "Total"),
+  `Suma de cuadrados` = c(
+    fmt(Sxy^2 / Sxx),
+    fmt(SS_trat_ajustada),
+    fmt(SS_E),
+    fmt(Syy)
+  ),
+  `Grados de libertad` = c(
+    "1",
+    as.character(t - 1),
+    as.character(t * (n - 1) - 1),
+    as.character(N - 1)
+  ),
+  `Cuadrado medio` = c(
+    "—",
+    fmt(MS_trat_ajustada),
+    fmt(MS_E),
+    "—"
+  ),
+  `F0` = c(
+    "—",
+    fmt(F_trat),
+    "—",
+    "—"
+  )
+)
+
+kable(tabla_1,
+      caption = "El análisis de covarianza como un análisis de varianza ajustado",
+      align = "c",
+      escape = FALSE) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+```{r}
+# Tabla 2: Sumas de cuadrados, productos cruzados y ajustes
+tabla_2 <- data.frame(
+  `Fuente de variación` = c("Tratamientos", "Error", "Total", "Tratamientos ajustados"),
+  `Grados de libertad` = c(
+    as.character(t - 1),
+    as.character(t * (n - 1)),
+    as.character(N - 1),
+    "—"
+  ),
+  `x` = c(fmt(Txx), fmt(Exx), fmt(Sxx), "—"),
+  `xy` = c(fmt(Txy), fmt(Exy), fmt(Sxy), "—"),
+  `y` = c(fmt(Tyy), fmt(Eyy), fmt(Syy), "—"),
+  `y ajustado` = c("—", fmt(SS_E), fmt(SS_E_prima), fmt(SS_trat_ajustada)),
+  `gl ajustado` = c(
+    "—",
+    as.character(t * (n - 1) - 1),
+    as.character(N - 2),
+    as.character(t - 1)
+  ),
+  `Cuadrado medio` = c("—", fmt(MS_E), "—", fmt(MS_trat_ajustada))
+)
+
+kable(tabla_2,
+      caption = "Análisis de covarianza de un experimento de un solo factor con una covariable",
+      align = "c",
+      escape = FALSE) %>%
+  add_header_above(c(" " = 2,
+                     "Sumas de cuadrados y productos" = 3,
+                     "Ajustados para la regresión" = 3),
+                   bold = TRUE) %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+
+Las tablas resumen el procedimiento manual del análisis de covarianza.
+
+
+El cuadrado medio de tratamientos ajustados es \(MS_{\text{Trat}}^{*}=6.64\), y al compararlo con el cuadrado medio del error se obtiene un estadístico \(F_0=2.61\). Este estadístico permite evaluar si existen diferencias significativas entre las resistencias medias ajustadas de las tres máquinas.
+
+
+## Valor-p y región crítica de las pruebas F
+
+Para tomar la decisión estadística se calcula el valor-p asociado a cada estadístico \(F\), utilizando la función `pf()` de R. Además, se obtiene el valor crítico \(F_c\) mediante la función `qf()`. La hipótesis nula se rechaza cuando \(F_0 > F_c\), o equivalentemente, cuando el valor-p es menor que \(\alpha=0.05\).
+
+```{r}
+
+# Valores críticos F
+Fc_trat <- qf(1 - alpha,
+              df1 = gl_trat,
+              df2 = gl_error)
+
+Fc_reg <- qf(1 - alpha,
+             df1 = gl_reg,
+             df2 = gl_error)
+
+
+# Nivel de significancia
+alpha <- 0.05
+
+# Valores-p
+p_trat <- pf(F_trat,
+             df1 = gl_trat,
+             df2 = gl_error,
+             lower.tail = FALSE)
+
+p_reg <- pf(F_reg,
+            df1 = gl_reg,
+            df2 = gl_error,
+            lower.tail = FALSE)
+
+# Decisión
+decision_trat <- ifelse(F_trat > Fc_trat,
+                        "Se rechaza H0",
+                        "No se rechaza H0")
+
+decision_reg <- ifelse(F_reg > Fc_reg,
+                       "Se rechaza H0",
+                       "No se rechaza H0")
+
+# Tabla resumen
+tabla_pruebas_F <- data.frame(
+  Prueba = c("Tratamientos ajustados", "Covariable"),
+  F0 = c(F_trat, F_reg),
+  Fc = c(Fc_trat, Fc_reg),
+  `gl numerador` = c(gl_trat, gl_reg),
+  `gl denominador` = c(gl_error, gl_error),
+  `Valor-p` = c(p_trat, p_reg),
+  Decisión = c(decision_trat, decision_reg),
+  check.names = FALSE
+)
+
+kable(tabla_pruebas_F,
+      digits = 4,
+      caption = "Valores-p y valores críticos asociados a las pruebas F",
+      align = "c") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+Para los tratamientos ajustados, se obtiene un valor-p mayor que \(0.05\) y un estadístico \(F_0\) menor que el valor crítico \(F_c\). Por lo tanto, no se rechaza la hipótesis nula, concluyendo que no existen diferencias significativas entre las resistencias medias ajustadas de las máquinas.
+
+En cambio, para la covariable diámetro, el valor-p es menor que \(0.05\) y el estadístico \(F_0\) supera el valor crítico \(F_c\). Por lo tanto, se rechaza la hipótesis nula y se concluye que el diámetro de la fibra tiene un efecto lineal significativo sobre la resistencia a la ruptura.
+
+
+## Estimación de parámetros en R
+
+A continuación, se estiman manualmente los parámetros del modelo ANCOVA:
+
+\[
+y_{ij}=\mu+\tau_j+\beta(x_{ij}-\bar{x}_{..})+\varepsilon_{ij}.
+\]
+
+```{r}
+
+# Valores básicos
+N <- nrow(datos)
+t <- nlevels(datos$maquina)
+n <- N / t
+
+x <- datos$diametro
+y <- datos$resistencia
+
+# Medias globales
+x_barra <- mean(x)
+y_barra <- mean(y)
+
+# Resumen por máquina
+resumen_parametros <- datos %>%
+  group_by(maquina) %>%
+  summarise(
+    n_j = n(),
+    x_barra_j = mean(diametro),
+    y_barra_j = mean(resistencia),
+    .groups = "drop"
+  )
+
+# Componentes totales
+Sxx <- sum((x - x_barra)^2)
+Sxy <- sum((x - x_barra) * (y - y_barra))
+
+# Componentes atribuibles a tratamientos
+Txx <- sum(resumen_parametros$n_j *
+             (resumen_parametros$x_barra_j - x_barra)^2)
+
+Txy <- sum(resumen_parametros$n_j *
+             (resumen_parametros$x_barra_j - x_barra) *
+             (resumen_parametros$y_barra_j - y_barra))
+
+# Componentes asociados al error
+Exx <- Sxx - Txx
+Exy <- Sxy - Txy
+
+# Estimación de parámetros
+mu_hat <- y_barra
+beta_hat <- Exy / Exx
+
+tabla_parametros_manual <- resumen_parametros %>%
+  mutate(
+    tau_hat = y_barra_j - y_barra - beta_hat * (x_barra_j - x_barra)
+  ) %>%
+  select(maquina, x_barra_j, y_barra_j, tau_hat)
+
+# Tabla de parámetros
+tabla_parametros_manual_final <- data.frame(
+  Parámetro = c("$\\hat{\\mu}$",
+                "$\\hat{\\beta}$",
+                "$\\hat{\\tau}_1$",
+                "$\\hat{\\tau}_2$",
+                "$\\hat{\\tau}_3$"),
+  Descripción = c("Media general",
+                  "Coeficiente asociado al diámetro",
+                  "Efecto de Máquina 1",
+                  "Efecto de Máquina 2",
+                  "Efecto de Máquina 3"),
+  Estimación = c(mu_hat,
+                 beta_hat,
+                 tabla_parametros_manual$tau_hat)
+)
+
+kable(tabla_parametros_manual_final,
+      digits = 4,
+      caption = "Parámetros estimados manualmente para el modelo ANCOVA",
+      escape = FALSE,
+      align = "c") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
+
+```{r}
+# Coeficientes estimados
+coeficientes <- coef(modelo_parametros_r)
+
+# Estimación de mu y beta
+mu_hat_r <- coeficientes["(Intercept)"]
+beta_hat_r <- coeficientes["diametro_c"]
+
+# Efectos de tratamiento
+efectos_maquina <- coeficientes[grep("^maquina", names(coeficientes))]
+
+# El último efecto se obtiene por la restricción suma cero
+tau_hat_r <- c(efectos_maquina, -sum(efectos_maquina))
+
+# Asignar nombres a los efectos
+names(tau_hat_r) <- levels(datos_r$maquina)
+
+# Tabla de parámetros estimados
+tabla_parametros_r <- data.frame(
+  Parametro = c("$\\hat{\\mu}$",
+                "$\\hat{\\beta}$",
+                paste0("$\\hat{\\tau}_{", 1:length(tau_hat_r), "}$")),
+  Descripción = c("Media general ajustada",
+                  "Coeficiente asociado al diámetro",
+                  paste("Efecto de", levels(datos_r$maquina))),
+  Estimación = c(mu_hat_r, beta_hat_r, tau_hat_r)
+)
+
+kable(tabla_parametros_r,
+      digits = 4,
+      caption = "Parámetros estimados del modelo ANCOVA mediante R",
+      escape = FALSE,
+      align = "c") %>%
+  kable_styling(full_width = FALSE, position = "center")
+```
+
